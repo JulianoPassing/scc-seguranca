@@ -2,7 +2,7 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const axios = require("axios");
 
 // Configurações
-const DISCORD_BOT_TOKEN = "tokenaqui";
+const DISCORD_BOT_TOKEN = "SEU_TOKEN_AQUI";
 const ECHO_API_KEY = "HLuY3TkWaQWm6r735cHCw.vfkXoZcrcj43vWsgJNd5hLYakB3ZbjuGwKvVFm6EPZMb";
 const axiosConfig = { headers: { Authorization: ECHO_API_KEY } };
 
@@ -86,11 +86,11 @@ const getScanDataComplete = async (pin) => {
     const responseUUID = await getScanByUUID(uuid);
     const scanInfo = responseUUID.data;
 
-    const formatacao = calcularDiferencaDiasEData(scanInfo.installationDate);
-    const lixeira = calcularDiferencaDiasEData(scanInfo.recycleBinModified);
+    const formatacao = calcularDiferencaDiasEData(scanInfo.results.installationDate);
+    const lixeira = calcularDiferencaDiasEData(scanInfo.results.recycleBinModified);
     const steams = linksSteam(scanInfo.accounts);
-    const deteccoesFormatadas = diagnosticoScan(scanInfo.traces);
-    const startTimeFormatado = gerarStartTimeFormatado(scanInfo.start_time);
+    const deteccoesFormatadas = diagnosticoScan(scanInfo.results.traces);
+    const startTimeFormatado = gerarStartTimeFormatado(scanInfo.results.start_time);
 
     return {
         color: 0x0099ff,
@@ -98,12 +98,13 @@ const getScanDataComplete = async (pin) => {
         description: [
             `**Resultado:** ${scanInfo.detection}`,
             `**Pin:** ${scanInfo.pin}`,
-            `**Duração:** ${scanInfo.speed ? `${(scanInfo.speed / 60000).toFixed(2)} minutos` : "N/A"}`,
+            `**Duração:** ${scanInfo.results.info.speed ? `${(scanInfo.results.info.speed / 60000).toFixed(2)} minutos` : "N/A"}`,
             `**Steams:** ${steams || "N/A"}`,
             `**Lixeira:** ${lixeira.diffDias} dias (${lixeira.dataFormatada})`,
             `**Formatação:** ${formatacao.diffDias} dias (${formatacao.dataFormatada})`,
             `**Detecção:**\n${deteccoesFormatadas}`,
             `**Start Time:**\n${startTimeFormatado}`,
+            ` ** Link Completo:** [Ver Mais](https://scan.echo.ac/${scanInfo.uuid})`,
         ].join("\n"),
     };
 };
