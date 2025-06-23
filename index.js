@@ -86,8 +86,8 @@ const getScanDataComplete = async (pin) => {
     const responseUUID = await getScanByUUID(uuid);
     const scanInfo = responseUUID.data;
 
-    const formatacao = calcularDiferencaDiasEData(scanInfo.results.installationDate);
-    const lixeira = calcularDiferencaDiasEData(scanInfo.results.recycleBinModified);
+    const formatacao = calcularDiferencaDiasEData(scanInfo.results.info.installationDate);
+    const lixeira = calcularDiferencaDiasEData(scanInfo.results.info.recycleBinModified);
     const steams = linksSteam(scanInfo.accounts);
     const deteccoesFormatadas = diagnosticoScan(scanInfo.results.traces);
     const startTimeFormatado = gerarStartTimeFormatado(scanInfo.results.start_time);
