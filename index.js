@@ -104,7 +104,7 @@ const getScanDataComplete = async (pin) => {
             `**Formatação:** ${formatacao.diffDias} dias (${formatacao.dataFormatada})`,
             `**Detecção:**\n${deteccoesFormatadas}`,
             `**Start Time:**\n${startTimeFormatado}`,
-            ` ** Link Completo:** [Ver Mais](https://scan.echo.ac/${scanInfo.uuid})`,
+            `**Link Completo:** [Ver Mais](https://scan.echo.ac/${scanInfo.uuid})`,
         ].join("\n"),
     };
 };
@@ -137,18 +137,18 @@ client.on("messageCreate", async (message) => {
                     return;
                 }
 
-                await message.channel.send(`Novo PIN: ${pin}\n${link}`);
-                await message.channel.send(`Iniciando polling para o PIN ${pin}...`);
+                await message.channel.send(`Novo PIN: ${pin}\nLink: ${link}\nIniciando polling para o PIN ${pin}...`);
 
+                const channel = message.channel;
                 const intervalId = setInterval(async () => {
                     try {
                         const res = await getScanByPin(pin);
                         if (res.status === 200 && res.data.length > 0) {
                             const embed = await getScanDataComplete(pin);
-                            await message.channel.send({ embeds: [embed] });
-                            clearInterval(activePollings.get(pin));
+                            await channel.send({ embeds: [embed] });
+                            clearInterval(intervalId);
                             activePollings.delete(pin);
-                            await message.channel.send(`Polling finalizado para o PIN ${pin}.`);
+                            await channel.send(`Polling finalizado para o PIN ${pin}.`);
                         }
                     } catch (err) {
                         console.error(`Erro no polling do PIN ${pin}:`, err.message);
@@ -216,15 +216,16 @@ client.on("messageCreate", async (message) => {
 
         await message.channel.send(`Reiniciando polling para o PIN ${pin}...`);
 
+        const channel = message.channel;
         const intervalId = setInterval(async () => {
             try {
                 const res = await getScanByPin(pin);
                 if (res.status === 200 && res.data.length > 0) {
                     const embed = await getScanDataComplete(pin);
-                    await message.channel.send({ embeds: [embed] });
-                    clearInterval(activePollings.get(pin));
+                    await channel.send({ embeds: [embed] });
+                    clearInterval(intervalId);
                     activePollings.delete(pin);
-                    await message.channel.send(`Polling finalizado para o PIN ${pin}.`);
+                    await channel.send(`Polling finalizado para o PIN ${pin}.`);
                 }
             } catch (err) {
                 console.error(`Erro no polling do PIN ${pin}:`, err.message);
