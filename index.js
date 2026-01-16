@@ -1,27 +1,26 @@
 const { Client, GatewayIntentBits } = require("discord.js");
 const axios = require("axios");
 
-// Configurações
 const DISCORD_BOT_TOKEN = "SEU_TOKEN_AQUI";
 const ECHO_API_KEY = "HLuY3TkWaQWm6r735cHCw.vfkXoZcrcj43vWsgJNd5hLYakB3ZbjuGwKvVFm6EPZMb";
-const axiosConfig = { headers: { Authorization: ECHO_API_KEY } };
 
-// Múltiplos pollings ativos: { pin: intervalId }
-const activePollings = new Map();
+let pollingInterval = null;
+let currentPin = null;
 
-// Utilitários
-const getPin = () => axios.get("https://api.echo.ac/v1/user/pin", axiosConfig);
-const getScanByPin = (pin) => axios.get(`https://api.echo.ac/v1/scan/${pin}`, axiosConfig);
-const getScanByUUID = (uuid) => axios.get(`https://api.echo.ac/v1/scan/${uuid}`, axiosConfig);
+const axiosConfig = {
+    headers: { Authorization: ECHO_API_KEY },
+};
+
+const getPin = () =>
+    axios.get("https://api.echo.ac/v1/user/pin", axiosConfig);
+
+const getScanByPin = (pin) =>
+    axios.get(`https://api.echo.ac/v1/scan/${pin}`, axiosConfig);
+
+const getScanByUUID = (uuid) =>
+    axios.get(`https://api.echo.ac/v1/scan/${uuid}`, axiosConfig);
 
 const calcularDiferencaDiasEData = (data) => {
-    if (!data || typeof data !== "string" || !data.includes("T")) {
-        return {
-            diffDias: "N/A",
-            dataFormatada: "Data indisponível"
-        };
-    }
-
     const dataFormatada = data.split("T")[0];
     const [ano, mes, dia] = dataFormatada.split("-");
     const dataAlvo = new Date(ano, mes - 1, dia);
@@ -30,67 +29,72 @@ const calcularDiferencaDiasEData = (data) => {
 
     return {
         diffDias,
-        dataFormatada: `${dia}/${mes}/${ano}`
+        dataFormatada: `${dia}/${mes}/${ano}`,
     };
 };
 
 const linksSteam = (contas) => {
-    if (!Array.isArray(contas) || contas.length === 0) {
-        return "Nenhuma conta Steam encontrada.";
-    }
-
-    return contas.map(conta => {
-        const [_, steamId64, nome] = conta.split(":");
-        return `[${nome || "Desconhecido"}](https://steamcommunity.com/profiles/${steamId64 || "0"})`;
-    }).join("\n");
+    return contas
+        .map((conta) => {
+            const [_, steamId64, nome] = conta.split(":");
+            return `[${nome}](https://steamcommunity.com/profiles/${steamId64})`;
+        })
+        .join("\n");
 };
 
 const diagnosticoScan = (traces) => {
-    if (!Array.isArray(traces) || traces.length === 0) {
-        return "Nenhuma detecção encontrada.";
-    }
-
-    return traces.map(trace =>
-        `**Gravidade**: \`${trace?.in_instance || "Desconhecido"}\`\n**Descrição**: ${trace?.name || "Sem nome"}`
-    ).join("\n\n");
+    return traces
+        .map((trace) => {
+            return `**Gravidade**: \`${trace.in_instance}\`\n**Descrição**: ${trace.name}`;
+        })
+        .join("\n\n");
 };
 
 const gerarStartTimeFormatado = (start_time) => {
     const chavesDesejadas = ["dps", "pca", "dgt", "sys", "explorer"];
 
-    if (!start_time || typeof start_time !== "object") {
-        return "Start time não disponível.";
-    }
-
     const formatarTimestamp = (timestamp) => {
-        if (!timestamp || isNaN(timestamp)) return "N/A";
-        const date = new Date(timestamp * 1000);
+        const date = new Date(timestamp * 1000); // segundos → ms
         const pad = (n) => String(n).padStart(2, "0");
-        return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+        return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(
+            date.getHours()
+        )}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
     };
 
-    return chavesDesejadas.map(chave => {
-        const ts = start_time[chave];
-        return `**${chave.toUpperCase()}**: ${formatarTimestamp(ts)}`;
-    }).join("\n");
+    return chavesDesejadas
+        .map((chave) => {
+            const ts = start_time[chave];
+            const dataFormatada = ts > 0 ? formatarTimestamp(ts) : "N/A";
+            return `**${chave.toUpperCase()}**: ${dataFormatada}`;
+        })
+        .join("\n");
 };
-
 
 const getScanDataComplete = async (pin) => {
     const responsePin = await getScanByPin(pin);
-    if (responsePin.status !== 200 || !responsePin.data[0] || responsePin.data[0].game !== "GTA-V RP") {
-        throw new Error("PIN inválido ou sem dados disponíveis.");
+
+    if (responsePin.status !== 200 || !responsePin.data[0]) {
+        throw new Error("Não foi possível obter o scan pelo pin.");
+    }
+
+    if (responsePin.data[0].game !== "GTA-V RP") {
+        throw new Error("Jogo incompatível ou scan não disponível.");
     }
 
     const uuid = responsePin.data[0].uuid;
     const responseUUID = await getScanByUUID(uuid);
+
+    if (responseUUID.status !== 200 || responseUUID.data.game !== "GTA-V RP") {
+        throw new Error("Detalhes do scan não encontrados.");
+    }
+
     const scanInfo = responseUUID.data;
 
-    const formatacao = calcularDiferencaDiasEData(scanInfo.results.info.installationDate);
-    const lixeira = calcularDiferencaDiasEData(scanInfo.results.info.recycleBinModified);
+    const formatacao = calcularDiferencaDiasEData(scanInfo.installationDate);
+    const lixeira = calcularDiferencaDiasEData(scanInfo.recycleBinModified);
     const steams = linksSteam(scanInfo.accounts);
-    const deteccoesFormatadas = diagnosticoScan(scanInfo.results.traces);
-    const startTimeFormatado = gerarStartTimeFormatado(scanInfo.results.start_time);
+    const deteccoesFormatadas = diagnosticoScan(scanInfo.traces);
+    const startTimeFormatado = gerarStartTimeFormatado(scanInfo.start_time);
 
     return {
         color: 0x0099ff,
@@ -98,161 +102,112 @@ const getScanDataComplete = async (pin) => {
         description: [
             `**Resultado:** ${scanInfo.detection}`,
             `**Pin:** ${scanInfo.pin}`,
-            `**Duração:** ${scanInfo.results.info.speed ? `${(scanInfo.results.info.speed / 60000).toFixed(2)} minutos` : "N/A"}`,
+            `**Duração:** ${scanInfo.speed ? `${(scanInfo.speed / 60000).toFixed(2)} minutos` : "N/A"}`,
             `**Steams:** ${steams || "N/A"}`,
             `**Lixeira:** ${lixeira.diffDias} dias (${lixeira.dataFormatada})`,
             `**Formatação:** ${formatacao.diffDias} dias (${formatacao.dataFormatada})`,
             `**Detecção:**\n${deteccoesFormatadas}`,
             `**Start Time:**\n${startTimeFormatado}`,
-            `**Link Completo:** [Ver Mais](https://scan.echo.ac/${scanInfo.uuid})`,
         ].join("\n"),
     };
 };
 
-// Inicializa cliente Discord
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
 client.on("ready", () => {
-    console.log(`✅ Bot conectado como ${client.user.tag}`);
+    console.log(`Bot conectado como ${client.user.tag}`);
 });
 
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
-    const content = message.content.trim();
-    const parts = content.split(" ");
-    const command = parts[0];
 
-    // Comando: /echo
-    if (command === "/echo") {
+    const content = message.content.trim();
+
+    if (content === "/echo") {
+        if (pollingInterval) {
+            await message.channel.send("Polling já está ativo!");
+            return;
+        }
+
         try {
             const response = await getPin();
             if (response.status === 200) {
-                const pin = response.data.pin;
+                currentPin = response.data.pin;
                 const link = response.data.links?.fivem || "Link não disponível";
-
-                if (activePollings.has(pin)) {
-                    await message.channel.send(`Polling já está ativo para o PIN ${pin}.`);
-                    return;
-                }
-
-                await message.channel.send(`Novo PIN: ${pin}\nLink: ${link}\nIniciando polling para o PIN ${pin}...`);
-
-                const channel = message.channel;
-                const intervalId = setInterval(async () => {
-                    try {
-                        const res = await getScanByPin(pin);
-                        if (res.status === 200 && res.data.length > 0) {
-                            const embed = await getScanDataComplete(pin);
-                            await channel.send({ embeds: [embed] });
-                            clearInterval(intervalId);
-                            activePollings.delete(pin);
-                            await channel.send(`Polling finalizado para o PIN ${pin}.`);
-                        }
-                    } catch (err) {
-                        console.error(`Erro no polling do PIN ${pin}:`, err.message);
-                    }
-                }, 30000);
-
-                activePollings.set(pin, intervalId);
+                await message.channel.send(`Seu pin é: ${currentPin}\n${link}`);
             } else {
-                await message.channel.send("Erro ao obter o PIN da API.");
+                await message.channel.send("Erro ao obter o pin da API.");
+                return;
             }
         } catch (error) {
-            await message.channel.send("Erro: " + error.message);
+            await message.channel.send(`Erro ao chamar a API: ${error.message}`);
+            return;
         }
+
+        await message.channel.send("Iniciando polling da API a cada 30 segundos...");
+
+        pollingInterval = setInterval(async () => {
+            if (!currentPin) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                return;
+            }
+
+            try {
+                const response = await getScanByPin(currentPin);
+
+                if (response.status === 200 && response.data.length > 0) {
+                    // Verifica se o scan está completo tentando obter os dados completos
+                    try {
+                        const embed = await getScanDataComplete(currentPin);
+                        await message.channel.send({ embeds: [embed] });
+
+                        clearInterval(pollingInterval);
+                        pollingInterval = null;
+                        currentPin = null; // Limpa o pin após enviar o resultado
+                    } catch (error) {
+                        // Scan ainda não está completo, aguarda próxima verificação
+                        // Não precisa fazer nada, apenas continua o polling
+                    }
+                }
+            } catch (error) {
+                console.error("Erro no polling da API:", error);
+            }
+        }, 30000);
     }
 
-    // Comando: /resultado <pin>
-    else if (command === "/resultado") {
+    else if (content.startsWith("/resultado")) {
+        const parts = content.split(" ");
         if (parts.length < 2) {
+            await message.channel.send("Por favor, informe o pin após o comando. Exemplo: /resultado ABC123");
             return;
         }
         const pin = parts[1];
+
         try {
             const embed = await getScanDataComplete(pin);
             await message.channel.send({ embeds: [embed] });
         } catch (error) {
-            await message.channel.send("Erro ao buscar resultado: " + error.message);
+            await message.channel.send("Ocorreu um erro ao buscar o resultado: " + error.message);
         }
     }
 
-    // Comando: /stop ou /stop <pin>
-    else if (command === "/stop") {
-        if (parts.length === 1) {
-            if (activePollings.size === 0) {
-                await message.channel.send("Nenhum polling ativo.");
-                return;
-            }
-            activePollings.forEach(clearInterval);
-            activePollings.clear();
-            await message.channel.send("Todos os pollings foram interrompidos.");
+    else if (content === "/stop") {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+            await message.channel.send("Polling interrompido com sucesso.");
         } else {
-            const pin = parts[1];
-            if (activePollings.has(pin)) {
-                clearInterval(activePollings.get(pin));
-                activePollings.delete(pin);
-                await message.channel.send(`Polling interrompido para o PIN ${pin}.`);
-            } else {
-                await message.channel.send(`Nenhum polling ativo para o PIN ${pin}.`);
-            }
+            await message.channel.send("Nenhum polling ativo no momento.");
         }
-    }
-
-    // Comando: /start <pin>
-    else if (command === "/start") {
-        if (parts.length < 2) {
-            await message.channel.send("Uso: `/start <pin>`");
-            return;
-        }
-
-        const pin = parts[1];
-
-        if (activePollings.has(pin)) {
-            await message.channel.send(`Polling já está ativo para o PIN ${pin}.`);
-            return;
-        }
-
-        await message.channel.send(`Reiniciando polling para o PIN ${pin}...`);
-
-        const channel = message.channel;
-        const intervalId = setInterval(async () => {
-            try {
-                const res = await getScanByPin(pin);
-                if (res.status === 200 && res.data.length > 0) {
-                    const embed = await getScanDataComplete(pin);
-                    await channel.send({ embeds: [embed] });
-                    clearInterval(intervalId);
-                    activePollings.delete(pin);
-                    await channel.send(`Polling finalizado para o PIN ${pin}.`);
-                }
-            } catch (err) {
-                console.error(`Erro no polling do PIN ${pin}:`, err.message);
-            }
-        }, 30000);
-
-        activePollings.set(pin, intervalId);
-    }
-
-    // Comando: /status
-    else if (command === "/status") {
-        if (activePollings.size === 0) {
-            await message.channel.send("Nenhum polling está ativo no momento.");
-            return;
-        }
-
-        const pins = Array.from(activePollings.keys())
-            .map(pin => `• ${pin}`)
-            .join("\n");
-        await message.channel.send(`📡 Pollings ativos:\n${pins}`);
     }
 });
 
-// Exporta rota HTTP opcional
+// Exporta rota HTTP simples, se usar este arquivo numa API
 module.exports = (req, res) => {
     res.status(200).send("Bot está rodando e a API está acessível!");
 };
 
-// Login do bot
 client.login(DISCORD_BOT_TOKEN);
