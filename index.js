@@ -1,8 +1,20 @@
+require("dotenv").config();
 const { Client, GatewayIntentBits } = require("discord.js");
 const axios = require("axios");
 
-const DISCORD_BOT_TOKEN = "SEU_TOKEN_AQUI";
-const ECHO_API_KEY = "HLuY3TkWaQWm6r735cHCw.vfkXoZcrcj43vWsgJNd5hLYakB3ZbjuGwKvVFm6EPZMb";
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+const ECHO_API_KEY = process.env.ECHO_API_KEY;
+
+// Validação das variáveis de ambiente
+if (!DISCORD_BOT_TOKEN) {
+    console.error("ERRO: DISCORD_BOT_TOKEN não está definido no arquivo .env");
+    process.exit(1);
+}
+
+if (!ECHO_API_KEY) {
+    console.error("ERRO: ECHO_API_KEY não está definido no arquivo .env");
+    process.exit(1);
+}
 
 let pollingInterval = null;
 let currentPin = null;

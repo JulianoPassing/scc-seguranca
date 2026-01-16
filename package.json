@@ -1,0 +1,23 @@
+{
+  "name": "scc-seguranca",
+  "version": "1.0.0",
+  "description": "Bot Discord para verificação de segurança com Echo.ac",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "security",
+    "echo.ac"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "discord.js": "^14.14.0",
+    "dotenv": "^16.3.1"
+  }
+}
