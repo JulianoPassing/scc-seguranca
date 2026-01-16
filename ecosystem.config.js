@@ -4,6 +4,7 @@ module.exports = {
       name: "scc-seguranca",
       script: "./index.js",
       instances: 1,
+      exec_mode: "fork", // Força modo fork ao invés de cluster
       autorestart: true,
       watch: false,
       max_memory_restart: "500M",

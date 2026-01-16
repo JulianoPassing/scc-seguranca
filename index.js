@@ -187,7 +187,15 @@ client.on("messageCreate", async (message) => {
                     }
                 }
             } catch (error) {
-                console.error("Erro no polling da API:", error);
+                // Trata erro 429 (Rate Limited) - não loga como erro crítico
+                if (error.response?.status === 429) {
+                    const retryAfter = error.response?.headers?.['retry-after'] || 60;
+                    // API está limitando requisições, aguarda próxima verificação normal (30s)
+                    // O intervalo de 30s já é suficiente para não sobrecarregar
+                } else {
+                    // Loga apenas erros não relacionados a rate limit
+                    console.error("Erro no polling da API:", error.message || error);
+                }
             }
         }, 30000);
     }
