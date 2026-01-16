@@ -148,6 +148,8 @@ client.on("messageCreate", async (message) => {
             if (response.status === 200) {
                 currentPin = response.data.pin;
                 const link = response.data.links?.fivem || "Link não disponível";
+                
+                // Envia apenas uma mensagem com o PIN e o link
                 await message.channel.send(`Seu pin é: ${currentPin}\n${link}`);
             } else {
                 await message.channel.send("Erro ao obter o pin da API.");
