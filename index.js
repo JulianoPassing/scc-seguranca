@@ -120,6 +120,7 @@ const getScanDataComplete = async (pin) => {
   const responseUUID = await getScanByUUID(uuid);
   const scanInfo = responseUUID.data;
 
+  // Torna o scan público automaticamente
   await tornarScanPublico(uuid).catch(() => {});
 
   const formatacao = calcularDiferencaDiasEData(
@@ -152,6 +153,7 @@ const getScanDataComplete = async (pin) => {
     );
 };
 
+// Inicializa cliente Discord
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -160,6 +162,7 @@ const client = new Client({
   ],
 });
 
+// Função global para enviar logs/erros por DM
 const sendErrorDM = async (errorMsg) => {
   if (!client.isReady() || !ADMIN_ID) return;
   try {
@@ -181,6 +184,7 @@ client.on("messageCreate", async (message) => {
   const parts = content.split(" ");
   const command = parts[0];
 
+  // Comando: /echo
   if (command === "/echo") {
     try {
       const response = await getPin();
@@ -222,7 +226,10 @@ client.on("messageCreate", async (message) => {
     } catch (error) {
       await sendErrorDM("Erro: " + error.message);
     }
-  } else if (command === "/resultado") {
+  }
+
+  // Comando: /resultado <pin>
+  else if (command === "/resultado") {
     if (parts.length < 2) {
       return;
     }
@@ -233,7 +240,10 @@ client.on("messageCreate", async (message) => {
     } catch (error) {
       await sendErrorDM("Erro ao buscar resultado: " + error.message);
     }
-  } else if (command === "/stop") {
+  }
+
+  // Comando: /stop ou /stop <pin>
+  else if (command === "/stop") {
     if (parts.length === 1) {
       if (activePollings.size === 0) {
         await message.channel.send("Nenhum polling ativo.");
@@ -252,7 +262,10 @@ client.on("messageCreate", async (message) => {
         await message.channel.send(`Nenhum polling ativo para o PIN ${pin}.`);
       }
     }
-  } else if (command === "/start") {
+  }
+
+  // Comando: /start <pin>
+  else if (command === "/start") {
     if (parts.length < 2) {
       await message.channel.send("Uso: `/start <pin>`");
       return;
@@ -283,7 +296,10 @@ client.on("messageCreate", async (message) => {
     }, 30000);
 
     activePollings.set(pin, intervalId);
-  } else if (command === "/status") {
+  }
+
+  // Comando: /status
+  else if (command === "/status") {
     if (activePollings.size === 0) {
       await message.channel.send("Nenhum polling está ativo no momento.");
       return;
@@ -296,10 +312,12 @@ client.on("messageCreate", async (message) => {
   }
 });
 
+// Exporta rota HTTP opcional
 module.exports = (req, res) => {
   res.status(200).send("Bot está rodando e a API está acessível!");
 };
 
+// Tratamento de Erros Globais para evitar travamentos silenciosos
 process.on("uncaughtException", async (err) => {
   console.error("Erro Fatal (uncaughtException):", err);
   await sendErrorDM(`Erro Fatal: ${err.message}\n${err.stack}`);
@@ -310,4 +328,5 @@ process.on("unhandledRejection", async (reason) => {
   await sendErrorDM(`Rejeição não tratada: ${reason}`);
 });
 
+// Login do bot
 client.login(DISCORD_BOT_TOKEN);
