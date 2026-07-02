@@ -1,8 +1,21 @@
 require("dotenv").config();
-const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+} = require("discord.js");
 const axios = require("axios");
 
-const { DISCORD_BOT_TOKEN, ECHO_API_KEY, ADMIN_ID } = process.env;
+const {
+  DISCORD_BOT_TOKEN,
+  DISCORD_CLIENT_ID,
+  DISCORD_GUILD_ID,
+  ECHO_API_KEY,
+  ADMIN_ID,
+} = process.env;
 
 if (!DISCORD_BOT_TOKEN) {
   console.error("ERRO: DISCORD_BOT_TOKEN não está definido no arquivo .env");
@@ -13,12 +26,62 @@ if (!ECHO_API_KEY) {
   process.exit(1);
 }
 
-const axiosConfig = { headers: { Authorization: ECHO_API_KEY } };
+const MODE = process.argv[2];
 
-// Múltiplos pollings ativos: { pin: intervalId }
+const commands = [
+  new SlashCommandBuilder()
+    .setName("echo")
+    .setDescription("Gera um PIN e acompanha o scan até ficar pronto."),
+  new SlashCommandBuilder()
+    .setName("resultado")
+    .setDescription("Busca o resultado completo de um PIN.")
+    .addStringOption((opt) =>
+      opt.setName("pin").setDescription("PIN do scan").setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName("stop")
+    .setDescription("Interrompe polling. Sem pin = interrompe todos.")
+    .addStringOption((opt) =>
+      opt.setName("pin").setDescription("PIN específico (opcional)").setRequired(false)
+    ),
+  new SlashCommandBuilder()
+    .setName("start")
+    .setDescription("Reinicia polling de um PIN.")
+    .addStringOption((opt) =>
+      opt.setName("pin").setDescription("PIN do scan").setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName("status")
+    .setDescription("Mostra pollings ativos."),
+].map((c) => c.toJSON());
+
+async function deployCommands() {
+  if (!DISCORD_CLIENT_ID || !DISCORD_GUILD_ID) {
+    console.error("ERRO: defina DISCORD_CLIENT_ID e DISCORD_GUILD_ID no .env");
+    process.exit(1);
+  }
+
+  const rest = new REST({ version: "10" }).setToken(DISCORD_BOT_TOKEN);
+  await rest.put(
+    Routes.applicationGuildCommands(DISCORD_CLIENT_ID, DISCORD_GUILD_ID),
+    { body: commands }
+  );
+  console.log("Slash commands registrados no servidor!");
+}
+
+if (MODE === "deploy") {
+  deployCommands()
+    .then(() => process.exit(0))
+    .catch((e) => {
+      console.error("Falha ao registrar comandos:", e);
+      process.exit(1);
+    });
+  return;
+}
+
+const axiosConfig = { headers: { Authorization: ECHO_API_KEY } };
 const activePollings = new Map();
 
-// Utilitários
 const getPin = () => axios.get("https://api.echo.ac/v1/user/pin", axiosConfig);
 const getScanByPin = (pin) =>
   axios.get(`https://api.echo.ac/v1/scan/${pin}`, axiosConfig);
@@ -120,7 +183,6 @@ const getScanDataComplete = async (pin) => {
   const responseUUID = await getScanByUUID(uuid);
   const scanInfo = responseUUID.data;
 
-  // Torna o scan público automaticamente
   await tornarScanPublico(uuid).catch(() => {});
 
   const formatacao = calcularDiferencaDiasEData(
@@ -153,7 +215,6 @@ const getScanDataComplete = async (pin) => {
     );
 };
 
-// Inicializa cliente Discord
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -162,7 +223,6 @@ const client = new Client({
   ],
 });
 
-// Função global para enviar logs/erros por DM
 const sendErrorDM = async (errorMsg) => {
   if (!client.isReady() || !ADMIN_ID) return;
   try {
@@ -174,150 +234,212 @@ const sendErrorDM = async (errorMsg) => {
   }
 };
 
-client.on("clientReady", () => {
+const notifyError = async (channel, errorMsg) => {
+  console.error(errorMsg);
+  await sendErrorDM(errorMsg);
+  if (channel?.send) {
+    await channel.send(`❌ Erro: ${String(errorMsg).slice(0, 1800)}`).catch(() => {});
+  }
+};
+
+function startPolling(channel, pin) {
+  if (activePollings.has(pin)) {
+    return `Polling já está ativo para o PIN ${pin}.`;
+  }
+
+  const intervalId = setInterval(async () => {
+    try {
+      const res = await getScanByPin(pin);
+      if (res.status === 200 && res.data.length > 0) {
+        const embed = await getScanDataComplete(pin);
+        await channel.send({ embeds: [embed] });
+        clearInterval(activePollings.get(pin));
+        activePollings.delete(pin);
+        await channel.send(`Polling finalizado para o PIN ${pin}.`);
+      }
+    } catch (err) {
+      await notifyError(channel, `Erro no polling do PIN ${pin}: ${err.message}`);
+    }
+  }, 30000);
+
+  activePollings.set(pin, intervalId);
+  return null;
+}
+
+async function runEcho(channel) {
+  const response = await getPin();
+  if (response.status !== 200) {
+    throw new Error("Erro ao obter o PIN da API.");
+  }
+
+  const pin = response.data.pin;
+  const link = response.data.links?.fivem || "Link não disponível";
+
+  const alreadyActive = startPolling(channel, pin);
+  if (alreadyActive) {
+    return alreadyActive;
+  }
+
+  await channel.send(`Novo PIN: ${pin}\n${link}`);
+  await channel.send(`Iniciando polling para o PIN ${pin}...`);
+  return null;
+}
+
+async function runResultado(channel, pin) {
+  const embed = await getScanDataComplete(pin);
+  await channel.send({ embeds: [embed] });
+}
+
+async function runStop(pin) {
+  if (!pin) {
+    if (activePollings.size === 0) {
+      return "Nenhum polling ativo.";
+    }
+    activePollings.forEach(clearInterval);
+    activePollings.clear();
+    return "Todos os pollings foram interrompidos.";
+  }
+
+  if (!activePollings.has(pin)) {
+    return `Nenhum polling ativo para o PIN ${pin}.`;
+  }
+
+  clearInterval(activePollings.get(pin));
+  activePollings.delete(pin);
+  return `Polling interrompido para o PIN ${pin}.`;
+}
+
+async function runStart(channel, pin) {
+  const alreadyActive = startPolling(channel, pin);
+  if (alreadyActive) {
+    return alreadyActive;
+  }
+
+  await channel.send(`Reiniciando polling para o PIN ${pin}...`);
+  return null;
+}
+
+function runStatus() {
+  if (activePollings.size === 0) {
+    return "Nenhum polling está ativo no momento.";
+  }
+
+  const pins = Array.from(activePollings.keys())
+    .map((p) => `• ${p}`)
+    .join("\n");
+  return `📡 Pollings ativos:\n${pins}`;
+}
+
+let readyHandled = false;
+function onReady() {
+  if (readyHandled) return;
+  readyHandled = true;
   console.log(`✅ Bot conectado como ${client.user.tag}`);
+}
+
+client.once("ready", onReady);
+client.once("clientReady", onReady);
+
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const channel = interaction.channel;
+  if (!channel) {
+    await interaction.reply({ content: "Canal inválido.", ephemeral: true });
+    return;
+  }
+
+  try {
+    if (interaction.commandName === "echo") {
+      await interaction.deferReply();
+      const msg = await runEcho(channel);
+      await interaction.editReply(msg || "✅ PIN gerado. Acompanhe as mensagens abaixo.");
+      return;
+    }
+
+    if (interaction.commandName === "resultado") {
+      const pin = interaction.options.getString("pin", true);
+      await interaction.deferReply();
+      await runResultado(channel, pin);
+      await interaction.editReply("✅ Resultado enviado abaixo.");
+      return;
+    }
+
+    if (interaction.commandName === "stop") {
+      const pin = interaction.options.getString("pin", false);
+      const msg = await runStop(pin);
+      await interaction.reply(msg);
+      return;
+    }
+
+    if (interaction.commandName === "start") {
+      const pin = interaction.options.getString("pin", true);
+      await interaction.deferReply();
+      const msg = await runStart(channel, pin);
+      await interaction.editReply(msg || `✅ Polling reiniciado para ${pin}.`);
+      return;
+    }
+
+    if (interaction.commandName === "status") {
+      await interaction.reply(runStatus());
+    }
+  } catch (error) {
+    await notifyError(channel, error.message);
+    const reply = interaction.deferred || interaction.replied
+      ? interaction.editReply.bind(interaction)
+      : interaction.reply.bind(interaction);
+    await reply(`❌ Erro: ${error.message}`).catch(() => {});
+  }
 });
 
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
+  if (message.author.bot || !message.content) return;
+
   const content = message.content.trim();
-  const parts = content.split(" ");
+  const parts = content.split(/\s+/);
   const command = parts[0];
 
-  // Comando: /echo
-  if (command === "/echo") {
-    try {
-      const response = await getPin();
-      if (response.status === 200) {
-        const pin = response.data.pin;
-        const link = response.data.links?.fivem || "Link não disponível";
-
-        if (activePollings.has(pin)) {
-          await message.channel.send(
-            `Polling já está ativo para o PIN ${pin}.`
-          );
-          return;
-        }
-
-        await message.channel.send(`Novo PIN: ${pin}\n${link}`);
-        await message.channel.send(`Iniciando polling para o PIN ${pin}...`);
-
-        const intervalId = setInterval(async () => {
-          try {
-            const res = await getScanByPin(pin);
-            if (res.status === 200 && res.data.length > 0) {
-              const embed = await getScanDataComplete(pin);
-              await message.channel.send({ embeds: [embed] });
-              clearInterval(activePollings.get(pin));
-              activePollings.delete(pin);
-              await message.channel.send(
-                `Polling finalizado para o PIN ${pin}.`
-              );
-            }
-          } catch (err) {
-            await sendErrorDM(`Erro no polling do PIN ${pin}: ${err.message}`);
-          }
-        }, 30000);
-
-        activePollings.set(pin, intervalId);
-      } else {
-        await sendErrorDM("Erro ao obter o PIN da API.");
-      }
-    } catch (error) {
-      await sendErrorDM("Erro: " + error.message);
-    }
-  }
-
-  // Comando: /resultado <pin>
-  else if (command === "/resultado") {
-    if (parts.length < 2) {
+  try {
+    if (command === "/echo") {
+      const msg = await runEcho(message.channel);
+      if (msg) await message.channel.send(msg);
       return;
     }
-    const pin = parts[1];
-    try {
-      const embed = await getScanDataComplete(pin);
-      await message.channel.send({ embeds: [embed] });
-    } catch (error) {
-      await sendErrorDM("Erro ao buscar resultado: " + error.message);
-    }
-  }
 
-  // Comando: /stop ou /stop <pin>
-  else if (command === "/stop") {
-    if (parts.length === 1) {
-      if (activePollings.size === 0) {
-        await message.channel.send("Nenhum polling ativo.");
+    if (command === "/resultado") {
+      if (parts.length < 2) return;
+      await runResultado(message.channel, parts[1]);
+      return;
+    }
+
+    if (command === "/stop") {
+      const msg = await runStop(parts[1]);
+      await message.channel.send(msg);
+      return;
+    }
+
+    if (command === "/start") {
+      if (parts.length < 2) {
+        await message.channel.send("Uso: `/start <pin>`");
         return;
       }
-      activePollings.forEach(clearInterval);
-      activePollings.clear();
-      await message.channel.send("Todos os pollings foram interrompidos.");
-    } else {
-      const pin = parts[1];
-      if (activePollings.has(pin)) {
-        clearInterval(activePollings.get(pin));
-        activePollings.delete(pin);
-        await message.channel.send(`Polling interrompido para o PIN ${pin}.`);
-      } else {
-        await message.channel.send(`Nenhum polling ativo para o PIN ${pin}.`);
-      }
-    }
-  }
-
-  // Comando: /start <pin>
-  else if (command === "/start") {
-    if (parts.length < 2) {
-      await message.channel.send("Uso: `/start <pin>`");
+      const msg = await runStart(message.channel, parts[1]);
+      if (msg) await message.channel.send(msg);
       return;
     }
 
-    const pin = parts[1];
-
-    if (activePollings.has(pin)) {
-      await message.channel.send(`Polling já está ativo para o PIN ${pin}.`);
-      return;
+    if (command === "/status") {
+      await message.channel.send(runStatus());
     }
-
-    await message.channel.send(`Reiniciando polling para o PIN ${pin}...`);
-
-    const intervalId = setInterval(async () => {
-      try {
-        const res = await getScanByPin(pin);
-        if (res.status === 200 && res.data.length > 0) {
-          const embed = await getScanDataComplete(pin);
-          await message.channel.send({ embeds: [embed] });
-          clearInterval(activePollings.get(pin));
-          activePollings.delete(pin);
-          await message.channel.send(`Polling finalizado para o PIN ${pin}.`);
-        }
-      } catch (err) {
-        await sendErrorDM(`Erro no polling do PIN ${pin}: ${err.message}`);
-      }
-    }, 30000);
-
-    activePollings.set(pin, intervalId);
-  }
-
-  // Comando: /status
-  else if (command === "/status") {
-    if (activePollings.size === 0) {
-      await message.channel.send("Nenhum polling está ativo no momento.");
-      return;
-    }
-
-    const pins = Array.from(activePollings.keys())
-      .map((pin) => `• ${pin}`)
-      .join("\n");
-    await message.channel.send(`📡 Pollings ativos:\n${pins}`);
+  } catch (error) {
+    await notifyError(message.channel, error.message);
   }
 });
 
-// Exporta rota HTTP opcional
 module.exports = (req, res) => {
   res.status(200).send("Bot está rodando e a API está acessível!");
 };
 
-// Tratamento de Erros Globais para evitar travamentos silenciosos
 process.on("uncaughtException", async (err) => {
   console.error("Erro Fatal (uncaughtException):", err);
   await sendErrorDM(`Erro Fatal: ${err.message}\n${err.stack}`);
@@ -328,5 +450,4 @@ process.on("unhandledRejection", async (reason) => {
   await sendErrorDM(`Rejeição não tratada: ${reason}`);
 });
 
-// Login do bot
 client.login(DISCORD_BOT_TOKEN);
