@@ -1,9 +1,25 @@
+require("dotenv").config();
+
 const { Client, GatewayIntentBits, EmbedBuilder } = require("discord.js");
 const axios = require("axios");
 
 // Configurações
-const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
-const ECHO_API_KEY = process.env.ECHO_API_KEY;
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN?.trim();
+const ECHO_API_KEY = process.env.ECHO_API_KEY?.trim();
+
+if (!DISCORD_BOT_TOKEN) {
+  console.error(
+    "DISCORD_BOT_TOKEN não definido. Crie um arquivo .env na raiz do projeto com DISCORD_BOT_TOKEN=seu_token",
+  );
+  process.exit(1);
+}
+
+if (!ECHO_API_KEY) {
+  console.error(
+    "ECHO_API_KEY não definido. Crie um arquivo .env na raiz do projeto com ECHO_API_KEY=sua_chave",
+  );
+  process.exit(1);
+}
 const ADMIN_ID = "377862544699949056";
 
 const axiosConfig = { headers: { Authorization: ECHO_API_KEY } };
@@ -353,4 +369,12 @@ process.on("unhandledRejection", async (reason, promise) => {
 });
 
 // Login do bot
-client.login(DISCORD_BOT_TOKEN);
+client.login(DISCORD_BOT_TOKEN).catch((err) => {
+  console.error("Falha ao conectar no Discord:", err.message);
+  if (err.code === "TokenInvalid") {
+    console.error(
+      "O token do Discord é inválido ou expirou. Gere um novo em https://discord.com/developers/applications",
+    );
+  }
+  process.exit(1);
+});

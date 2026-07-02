@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 module.exports = {
   apps: [
     {
@@ -11,6 +13,8 @@ module.exports = {
       max_memory_restart: "500M",
       env: {
         NODE_ENV: "production",
+        DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN,
+        ECHO_API_KEY: process.env.ECHO_API_KEY,
       },
       error_file: "./logs/pm2-error.log",
       out_file: "./logs/pm2-out.log",
