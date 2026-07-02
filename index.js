@@ -357,13 +357,19 @@ function runStatus() {
 }
 
 let readyHandled = false;
-function onReady() {
+async function onReady() {
   if (readyHandled) return;
   readyHandled = true;
   console.log(`✅ Bot conectado como ${client.user.tag}`);
+
+  try {
+    await getPin();
+    console.log("✅ Echo API key válida");
+  } catch (error) {
+    console.error(`❌ Echo API key inválida: ${formatApiError(error)}`);
+  }
 }
 
-client.once("ready", onReady);
 client.once("clientReady", onReady);
 
 client.on("interactionCreate", async (interaction) => {

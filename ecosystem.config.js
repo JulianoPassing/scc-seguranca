@@ -3,6 +3,7 @@ module.exports = {
     {
       name: "scc-seguranca",
       script: "./index.js",
+      cwd: __dirname,
       instances: 1,
       exec_mode: "fork", // Força modo fork ao invés de cluster
       autorestart: true,
