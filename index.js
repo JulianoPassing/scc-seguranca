@@ -82,6 +82,22 @@ if (MODE === "deploy") {
 const axiosConfig = { headers: { Authorization: ECHO_API_KEY } };
 const activePollings = new Map();
 
+function formatApiError(error) {
+  const status = error.response?.status;
+  const apiMessage = error.response?.data?.message;
+
+  if (status === 403) {
+    return apiMessage || "API Echo recusou acesso (403). Verifique se ECHO_API_KEY no .env está correta e ativa em dash.echo.ac.";
+  }
+  if (status === 401) {
+    return apiMessage || "API Echo não autorizou (401). ECHO_API_KEY inválida ou ausente.";
+  }
+  if (status === 429) {
+    return apiMessage || "API Echo limitou requisições (429). Aguarde alguns minutos e tente novamente.";
+  }
+  return apiMessage || error.message || String(error);
+}
+
 const getPin = () => axios.get("https://api.echo.ac/v1/user/pin", axiosConfig);
 const getScanByPin = (pin) =>
   axios.get(`https://api.echo.ac/v1/scan/${pin}`, axiosConfig);
@@ -234,9 +250,13 @@ const sendErrorDM = async (errorMsg) => {
   }
 };
 
-const notifyError = async (channel, errorMsg) => {
+const logError = async (errorMsg) => {
   console.error(errorMsg);
   await sendErrorDM(errorMsg);
+};
+
+const notifyError = async (channel, errorMsg) => {
+  await logError(errorMsg);
   if (channel?.send) {
     await channel.send(`❌ Erro: ${String(errorMsg).slice(0, 1800)}`).catch(() => {});
   }
@@ -258,7 +278,7 @@ function startPolling(channel, pin) {
         await channel.send(`Polling finalizado para o PIN ${pin}.`);
       }
     } catch (err) {
-      await notifyError(channel, `Erro no polling do PIN ${pin}: ${err.message}`);
+      await notifyError(channel, `Erro no polling do PIN ${pin}: ${formatApiError(err)}`);
     }
   }, 30000);
 
@@ -267,7 +287,13 @@ function startPolling(channel, pin) {
 }
 
 async function runEcho(channel) {
-  const response = await getPin();
+  let response;
+  try {
+    response = await getPin();
+  } catch (error) {
+    throw new Error(formatApiError(error));
+  }
+
   if (response.status !== 200) {
     throw new Error("Erro ao obter o PIN da API.");
   }
@@ -384,11 +410,12 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.reply(runStatus());
     }
   } catch (error) {
-    await notifyError(channel, error.message);
+    const msg = formatApiError(error);
+    await logError(msg);
     const reply = interaction.deferred || interaction.replied
       ? interaction.editReply.bind(interaction)
       : interaction.reply.bind(interaction);
-    await reply(`❌ Erro: ${error.message}`).catch(() => {});
+    await reply(`❌ Erro: ${msg}`).catch(() => {});
   }
 });
 
@@ -432,7 +459,7 @@ client.on("messageCreate", async (message) => {
       await message.channel.send(runStatus());
     }
   } catch (error) {
-    await notifyError(message.channel, error.message);
+    await notifyError(message.channel, formatApiError(error));
   }
 });
 
