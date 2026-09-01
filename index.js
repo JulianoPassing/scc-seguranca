@@ -7,8 +7,12 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  SlashCommandBuilder,
+  AttachmentBuilder,
+  Events,
 } = require("discord.js");
 const axios = require("axios");
+const { gerarHtmlResultado } = require("./htmlResultado");
 
 // Configurações
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN?.trim();
@@ -316,9 +320,16 @@ const montarMensagemResultado = async (scanInfo, pinFallback) => {
     `**Resultado do Echo: ${detection}**`,
     `PIN: \`${pin || "N/A"}\``,
     linkScan,
+    "HTML anexado — baixe e abra no navegador (visual SCC, igual ao site).",
   ].join("\n");
 
-  return { content, embeds: [embed], components };
+  const nomeArquivo = `scc-echo-${String(pin || "scan").replace(/[^a-zA-Z0-9_-]/g, "")}.html`;
+  const html = gerarHtmlResultado(scanInfo, pin);
+  const files = [
+    new AttachmentBuilder(Buffer.from(html, "utf8"), { name: nomeArquivo }),
+  ];
+
+  return { content, embeds: [embed], components, files };
 };
 
 const getScanDataComplete = async (pin, uuidFromPolling = null) => {
@@ -353,15 +364,21 @@ const enviarResultadoNoCanal = async (channel, payload) => {
   await channel.send(payload);
 };
 
-const iniciarPolling = async (pin, channel) => {
+const iniciarPolling = async (pin, channel, { avisar = true } = {}) => {
+  if (!channel || typeof channel.send !== "function") {
+    throw new Error("Canal do Discord indisponível para acompanhar o scan.");
+  }
+
   if (activePollings.has(pin)) {
     await channel.send(`Polling já está ativo para o PIN ${pin}.`);
     return;
   }
 
-  await channel.send(
-    `Acompanhando o PIN \`${pin}\`. Quando o scan terminar, mando o resultado completo aqui.`,
-  );
+  if (avisar) {
+    await channel.send(
+      `Acompanhando o PIN \`${pin}\`. Quando o scan terminar, mando o resultado completo aqui.`,
+    );
+  }
 
   let uuid = null;
   let avisouInicio = false;
@@ -422,6 +439,138 @@ const iniciarPolling = async (pin, channel) => {
   activePollings.set(pin, { intervalId, timeoutId });
 };
 
+const slashCommands = [
+  new SlashCommandBuilder()
+    .setName("echo")
+    .setDescription("Gera um novo PIN do Echo e acompanha o resultado"),
+  new SlashCommandBuilder()
+    .setName("resultado")
+    .setDescription("Puxa o resultado completo de um PIN do Echo")
+    .addStringOption((option) =>
+      option
+        .setName("pin")
+        .setDescription("PIN ou link do Echo (ex: mqd26v)")
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName("start")
+    .setDescription("Começa a acompanhar um PIN até o resultado sair")
+    .addStringOption((option) =>
+      option.setName("pin").setDescription("PIN do Echo").setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName("stop")
+    .setDescription("Para o acompanhamento de um PIN")
+    .addStringOption((option) =>
+      option.setName("pin").setDescription("PIN específico (vazio = todos)"),
+    ),
+  new SlashCommandBuilder()
+    .setName("status")
+    .setDescription("Mostra os PINs que estão sendo acompanhados"),
+];
+
+const payloadTexto = (texto) =>
+  typeof texto === "string" ? { content: texto } : texto;
+
+const handleEcho = async (reply, channel) => {
+  const response = await getPin();
+  if (response.status !== 200) {
+    await reply({ content: "Erro ao obter o PIN da API." });
+    await sendErrorDM("Erro ao obter o PIN da API.");
+    return;
+  }
+  const pin = response.data.pin;
+  const link = response.data.links?.fivem || "Link não disponível";
+  await reply({ content: `Novo PIN: ${pin}\n${link}` });
+  await iniciarPolling(pin, channel);
+};
+
+const handleResultado = async (reply, channel, pinRaw) => {
+  const pin = extrairPin(pinRaw);
+  if (!pin) {
+    await reply({
+      content: "Uso: `/resultado pin:mqd26v`\nExemplo de PIN: `mqd26v`",
+    });
+    return;
+  }
+  try {
+    const payload = await getScanDataComplete(pin);
+    await reply(payload);
+  } catch (error) {
+    const aindaProcessando = /incompleto|processamento/i.test(error.message);
+    if (aindaProcessando) {
+      await reply({
+        content: `Ainda não tem resultado pronto para o PIN \`${pin}\`. Vou acompanhar e mando aqui quando sair.`,
+      });
+      await iniciarPolling(pin, channel, { avisar: false });
+      return;
+    }
+    await reply({
+      content: `Não consegui montar o resultado do PIN \`${pin}\`: ${error.message}`,
+    });
+    await sendErrorDM("Erro ao buscar resultado: " + error.message);
+  }
+};
+
+const handleStop = async (reply, pinRaw) => {
+  const pin = pinRaw ? extrairPin(pinRaw) || pinRaw.trim() : null;
+  if (!pin) {
+    if (activePollings.size === 0) {
+      await reply({ content: "Nenhum polling ativo." });
+      return;
+    }
+    for (const ativo of Array.from(activePollings.keys())) {
+      pararPolling(ativo);
+    }
+    await reply({ content: "Todos os pollings foram interrompidos." });
+    return;
+  }
+  if (activePollings.has(pin)) {
+    pararPolling(pin);
+    await reply({ content: `Polling interrompido para o PIN ${pin}.` });
+  } else {
+    await reply({ content: `Nenhum polling ativo para o PIN ${pin}.` });
+  }
+};
+
+const handleStart = async (reply, channel, pinRaw) => {
+  const pin = extrairPin(pinRaw);
+  if (!pin) {
+    await reply({ content: "Uso: `/start pin:mqd26v`" });
+    return;
+  }
+  if (activePollings.has(pin)) {
+    await reply({ content: `Polling já está ativo para o PIN ${pin}.` });
+    return;
+  }
+  await reply({
+    content: `Acompanhando o PIN \`${pin}\`. Quando o scan terminar, mando o resultado completo aqui.`,
+  });
+  await iniciarPolling(pin, channel, { avisar: false });
+};
+
+const handleStatus = async (reply) => {
+  if (activePollings.size === 0) {
+    await reply({ content: "Nenhum polling está ativo no momento." });
+    return;
+  }
+  const pins = Array.from(activePollings.keys())
+    .map((pin) => `• ${pin}`)
+    .join("\n");
+  await reply({ content: `📡 Pollings ativos:\n${pins}` });
+};
+
+const registrarComandos = async () => {
+  const body = slashCommands.map((command) => command.toJSON());
+  await client.application.commands.set(body);
+  for (const guild of client.guilds.cache.values()) {
+    await guild.commands.set(body).catch((err) => {
+      console.error(`Falha ao registrar comandos em ${guild.id}:`, err.message);
+    });
+  }
+  console.log("✅ Slash commands registrados (/echo /resultado /start /stop /status)");
+};
+
 // Inicializa cliente Discord
 const client = new Client({
   intents: [
@@ -443,8 +592,56 @@ const sendErrorDM = async (errorMsg) => {
   }
 };
 
-client.on("ready", () => {
+client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot conectado como ${client.user.tag}`);
+  try {
+    await registrarComandos();
+  } catch (err) {
+    console.error("Erro ao registrar slash commands:", err);
+    await sendErrorDM("Erro ao registrar slash commands: " + err.message);
+  }
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  try {
+    await interaction.deferReply();
+  } catch (err) {
+    console.error("Não deu para reconhecer o comando a tempo:", err);
+    return;
+  }
+
+  const reply = (payload) => interaction.editReply(payloadTexto(payload));
+  const channel = interaction.channel || (await interaction.client.channels.fetch(interaction.channelId).catch(() => null));
+
+  try {
+    switch (interaction.commandName) {
+      case "echo":
+        await handleEcho(reply, channel);
+        break;
+      case "resultado":
+        await handleResultado(reply, channel, interaction.options.getString("pin"));
+        break;
+      case "start":
+        await handleStart(reply, channel, interaction.options.getString("pin"));
+        break;
+      case "stop":
+        await handleStop(reply, interaction.options.getString("pin"));
+        break;
+      case "status":
+        await handleStatus(reply);
+        break;
+      default:
+        await reply({ content: "Comando não reconhecido." });
+    }
+  } catch (error) {
+    console.error("Erro no slash command:", error);
+    await interaction
+      .editReply({ content: `Erro ao executar o comando: ${error.message}` })
+      .catch(() => {});
+    await sendErrorDM(`Erro no comando /${interaction.commandName}: ${error.stack || error.message}`);
+  }
 });
 
 client.on("messageCreate", async (message) => {
@@ -452,100 +649,23 @@ client.on("messageCreate", async (message) => {
   const content = message.content.trim();
   const parts = content.split(" ");
   const command = parts[0];
+  const reply = (payload) => message.channel.send(payloadTexto(payload));
 
-  // Comando: /echo
   if (command === "/echo") {
     try {
-      const response = await getPin();
-      if (response.status === 200) {
-        const pin = response.data.pin;
-        const link = response.data.links?.fivem || "Link não disponível";
-
-        await message.channel.send(`Novo PIN: ${pin}\n${link}`);
-        await iniciarPolling(pin, message.channel);
-      } else {
-        await message.channel.send("Erro ao obter o PIN da API.");
-        await sendErrorDM("Erro ao obter o PIN da API.");
-      }
+      await handleEcho(reply, message.channel);
     } catch (error) {
-      await message.channel.send("Erro ao gerar o PIN. O admin foi notificado.");
+      await reply({ content: "Erro ao gerar o PIN. O admin foi notificado." });
       await sendErrorDM("Erro: " + error.message);
     }
-  }
-
-  // Comando: /resultado <pin ou link>
-  else if (command === "/resultado") {
-    const pin = extrairPin(parts.slice(1).join(" "));
-    if (!pin) {
-      await message.channel.send(
-        "Uso: `/resultado <pin>`\nExemplo: `/resultado mqd26v`",
-      );
-      return;
-    }
-    try {
-      const payload = await getScanDataComplete(pin);
-      await enviarResultadoNoCanal(message.channel, payload);
-    } catch (error) {
-      const aindaProcessando = /incompleto|processamento/i.test(error.message);
-      if (aindaProcessando) {
-        await iniciarPolling(pin, message.channel);
-        return;
-      }
-      await message.channel.send(
-        `Não consegui montar o resultado do PIN \`${pin}\`: ${error.message}`,
-      );
-      await sendErrorDM("Erro ao buscar resultado: " + error.message);
-    }
-  }
-
-  // Comando: /stop ou /stop <pin>
-  else if (command === "/stop") {
-    if (parts.length === 1) {
-      if (activePollings.size === 0) {
-        await message.channel.send("Nenhum polling ativo.");
-        return;
-      }
-      for (const pin of Array.from(activePollings.keys())) {
-        pararPolling(pin);
-      }
-      await message.channel.send("Todos os pollings foram interrompidos.");
-    } else {
-      const pin = extrairPin(parts.slice(1).join(" ")) || parts[1];
-      if (activePollings.has(pin)) {
-        pararPolling(pin);
-        await message.channel.send(`Polling interrompido para o PIN ${pin}.`);
-      } else {
-        await message.channel.send(`Nenhum polling ativo para o PIN ${pin}.`);
-      }
-    }
-  }
-
-  // Comando: /start <pin>
-  else if (command === "/start") {
-    if (parts.length < 2) {
-      await message.channel.send("Uso: `/start <pin>`");
-      return;
-    }
-
-    const pin = extrairPin(parts.slice(1).join(" "));
-    if (!pin) {
-      await message.channel.send("Uso: `/start <pin>`");
-      return;
-    }
-    await iniciarPolling(pin, message.channel);
-  }
-
-  // Comando: /status
-  else if (command === "/status") {
-    if (activePollings.size === 0) {
-      await message.channel.send("Nenhum polling está ativo no momento.");
-      return;
-    }
-
-    const pins = Array.from(activePollings.keys())
-      .map((pin) => `• ${pin}`)
-      .join("\n");
-    await message.channel.send(`📡 Pollings ativos:\n${pins}`);
+  } else if (command === "/resultado") {
+    await handleResultado(reply, message.channel, parts.slice(1).join(" "));
+  } else if (command === "/stop") {
+    await handleStop(reply, parts.slice(1).join(" "));
+  } else if (command === "/start") {
+    await handleStart(reply, message.channel, parts.slice(1).join(" "));
+  } else if (command === "/status") {
+    await handleStatus(reply);
   }
 });
 
