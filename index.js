@@ -165,8 +165,11 @@ const diagnosticoScan = (traces) => {
 
   return traces
     .map((trace) => {
-      const nome = trace?.name || "Sem nome";
-      const instancia = formatarInstancia(trace?.in_instance);
+      const nome =
+        trace?.localisation?.en ||
+        trace?.name ||
+        "Sem nome";
+      const instancia = formatarInstancia(trace?.in_instance ?? trace?.instance);
       const jaTemInstancia = /in instance|out of instance/i.test(nome);
       const sufixo = instancia && !jaTemInstancia ? ` ${instancia}` : "";
       return `• ${nome}${sufixo}`;
@@ -212,7 +215,9 @@ const scanTemResultados = (scanInfo) => {
 
 const corPorResultado = (detection) => {
   const d = String(detection || "").toLowerCase();
-  if (d.includes("detect") && !d.includes("undetect")) return 0xed4245;
+  if (d.includes("cheat") || (d.includes("detect") && !d.includes("undetect"))) {
+    return 0xed4245;
+  }
   if (d.includes("clean") || d.includes("undetect") || d.includes("none")) {
     return 0x57f287;
   }
@@ -224,7 +229,8 @@ const formatarDuracao = (speed) => {
   const ms = Number(speed);
   if (Number.isNaN(ms)) return "N/A";
   const segundos = ms >= 1000 ? Math.round(ms / 1000) : Math.round(ms);
-  return `${segundos}s`;
+  if (segundos < 90) return `${segundos}s`;
+  return `${Math.floor(segundos / 60)}m ${String(segundos % 60).padStart(2, "0")}s`;
 };
 
 const formatarVM = (info, scanInfo) => {
@@ -252,14 +258,21 @@ const montarMensagemResultado = async (scanInfo, pinFallback) => {
   const linkScan = `https://scan.echo.ac/${uuid}`;
   const formatacao = calcularDiferencaDiasEData(info.installationDate);
   const lixeira = calcularDiferencaDiasEData(info.recycleBinModified);
-  const steams = linksSteam(scanInfo.accounts);
-  const deteccoes = diagnosticoScan(scanInfo.results?.traces);
-  const startTime = gerarStartTimeFormatado(scanInfo.results?.start_time);
+  const steams = linksSteam(scanInfo.accounts || scanInfo.results?.accounts);
+  const deteccoes = diagnosticoScan(
+    Array.isArray(scanInfo.results?.traces) && scanInfo.results.traces.length
+      ? scanInfo.results.traces
+      : scanInfo.results?.indications,
+  );
+  const startTime = gerarStartTimeFormatado(
+    scanInfo.results?.start_time || scanInfo.results?.startTime,
+  );
   const os = info.os || info.operatingSystem || scanInfo.os || "Windows";
   const country = info.country || scanInfo.country || "N/A";
   const connection =
-    info.connectionType || info.connection || scanInfo.connectionType || "N/A";
+    info.vpn || info.connectionType || info.connection || scanInfo.connectionType || "N/A";
   const dataScan =
+    info.timestamp ||
     scanInfo.created_at ||
     scanInfo.createdAt ||
     scanInfo.date ||
