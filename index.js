@@ -272,7 +272,18 @@ const montarMensagemResultado = async (scanInfo, pinFallback) => {
     .setURL(linkScan)
     .setDescription(
       truncar(
-        `Echo concluiu o scan. Resumo igual ao overview do site:\n[Abrir resultado completo](${linkScan})`,
+        [
+          `Echo concluiu o scan. HTML anexado com o relatório completo no visual SCC.`,
+          `[Abrir resultado no Echo](${linkScan})`,
+          Number(formatacao.diffDias) <= 7
+            ? `⚠️ Formatação há ${formatacao.diffDias} dia(s)`
+            : "",
+          Number(lixeira.diffDias) <= 2
+            ? `⚠️ Lixeira há ${lixeira.diffDias} dia(s)`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
         DESC_MAX,
       ),
     )
@@ -562,13 +573,14 @@ const handleStatus = async (reply) => {
 
 const registrarComandos = async () => {
   const body = slashCommands.map((command) => command.toJSON());
-  await client.application.commands.set(body);
+  // Só no servidor: se registrar global + guild, o Discord mostra o comando duplicado.
+  await client.application.commands.set([]);
   for (const guild of client.guilds.cache.values()) {
     await guild.commands.set(body).catch((err) => {
       console.error(`Falha ao registrar comandos em ${guild.id}:`, err.message);
     });
   }
-  console.log("✅ Slash commands registrados (/echo /resultado /start /stop /status)");
+  console.log("✅ Slash commands registrados no servidor (/echo /resultado /start /stop /status)");
 };
 
 // Inicializa cliente Discord
