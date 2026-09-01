@@ -12,7 +12,7 @@ const {
   Events,
 } = require("discord.js");
 const axios = require("axios");
-const { gerarHtmlResultado } = require("./htmlResultado");
+const { gerarHtmlResultado, analisarPertoDoFiveM } = require("./htmlResultado");
 
 // Configurações
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN?.trim();
@@ -164,6 +164,8 @@ const diagnosticoScan = (traces) => {
   }
 
   return traces
+    .slice()
+    .sort((a, b) => Number(b.level ?? b.severity ?? 0) - Number(a.level ?? a.severity ?? 0))
     .map((trace) => {
       const nome =
         trace?.localisation?.en ||
@@ -325,7 +327,27 @@ const montarMensagemResultado = async (scanInfo, pinFallback) => {
       { name: "Contas Steam", value: truncar(steams) },
       { name: "Detecções", value: truncar(deteccoes) },
       { name: "Start Time", value: truncar(startTime) },
-    )
+    );
+
+  const perto = analisarPertoDoFiveM({ results: scanInfo.results, ...scanInfo });
+  if (perto.suspeitos.length) {
+    embed.addFields({
+      name: "Perto do FiveM (±10 min)",
+      value: truncar(
+        perto.suspeitos
+          .slice(0, 6)
+          .map((e) => `• ${e.action} \`${e.caminhoFinal.split("/").pop() || e.caminhoFinal}\``)
+          .join("\n") + (perto.suspeitos.length > 6 ? `\n… +${perto.suspeitos.length - 6}` : ""),
+      ),
+    });
+  } else if (perto.fivemAt) {
+    embed.addFields({
+      name: "Perto do FiveM (±10 min)",
+      value: `Nada fora da allowlist. FiveM: ${perto.fivemAt.toLocaleString("pt-BR")}`,
+    });
+  }
+
+  embed
     .setFooter({ text: "SCC Segurança • Echo.ac" })
     .setTimestamp();
 
